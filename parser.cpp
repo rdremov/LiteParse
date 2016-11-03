@@ -422,7 +422,7 @@ struct	PARSER
 				if( sign < 0 )
 					vFloat = -vFloat;
 				val.Set(vFloat);
-				index = offset;
+				index = offset - 1;
 				return true;
 			}
 			else if( cInt )
@@ -431,7 +431,7 @@ struct	PARSER
 				if( sign < 0 )
 					vInt = -vInt;
 				val.Set((int)vInt);
-				index = offset;
+				index = offset - 1;
 				return true;
 			}
 		}
@@ -472,7 +472,7 @@ using namespace RVD_FORMULA;
 
 int main(int argc, char* argv[])
 {
-	char szFormula[]="1.23e-3*2+3*4";
+	char szFormula[]="1*2+3*4";
 	STR strFormula = {szFormula, strlen(szFormula)};
 	NODE* pNode = parse(strFormula);
 	int nRet = pNode->Exec();
