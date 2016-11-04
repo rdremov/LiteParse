@@ -23,6 +23,8 @@ enum OP
 	OP_DIVIDE,
 	OP_UNARY_PLUS,
 	OP_UNARY_MINUS,
+
+	OP_PARENTHESIS = -100,
 };
 
 enum OPDIR
@@ -208,7 +210,7 @@ struct NODE
 				return ret;
 		}
 
-		if( op != OP_NONE )
+		if( op > OP_NONE )
 		{
 			switch( l_ops[op].count )
 			{
@@ -222,6 +224,8 @@ struct NODE
 				break;
 			}
 		}
+		else if( op == OP_PARENTHESIS )
+			val = child->val;
 
 		if( next )
 		{
@@ -234,7 +238,7 @@ struct NODE
 
 	void		MakeTree()
 	{
-		if( op != OP_NONE )
+		if( op > OP_NONE )
 		{
 			NODE* p = this;
 			for(int ii=0; ii<l_ops[op].count; ii++)
@@ -253,7 +257,7 @@ class	Parser
 {
 public:
 	Parser(const STR& strFormula)
-		:	_str(strFormula)
+		:	_str(strFormula), _index(0)
 	{
 	}
 
@@ -269,13 +273,26 @@ public:
 		#define REMOVE_NODE(_p, _head)	_p = _head, _head = _p->next
 		#define MOVE_NODE				REMOVE_NODE(pTemp, pOps), INSERT_NODE(pTemp, pRoot)
 
-		for(_index=0; _index<_str.len; _index++)
+		for( ; _index<_str.len; _index++)
 		{
 			if( ParseSpace() )
 				continue;
 
+			if(  ')' == _str.data[_index] )
+				break;
+
+			if( '(' == _str.data[_index] )
+			{
+				_index++;
+				NODE* pParent = new NODE;
+				pParent->op = OP_PARENTHESIS;
+				pParent->child = Parse();
+				INSERT_NODE(pParent, pRoot);
+				continue;
+			}
+
 			OP op;
-			if( ParseOperator(op, pRoot != NULL) )
+			if( ParseOperator(op, !pRoot) )
 			{
 				NODE* pOp = new NODE;
 				pOp->op = op;
@@ -320,16 +337,16 @@ protected:
 		return false;
 	}
 	
-	bool	ParseOperator(OP& op, bool bRoot)
+	bool	ParseOperator(OP& op, bool bFirst)
 	{
 		op = OP_NONE;
 		switch( _str.data[_index] )
 		{
 		case '+':
-			op = bRoot ? OP_PLUS : OP_UNARY_PLUS;
+			op = bFirst ? OP_UNARY_PLUS : OP_PLUS;
 			break;
 		case '-':
-			op = bRoot ? OP_MINUS : OP_UNARY_MINUS;
+			op = bFirst ? OP_UNARY_MINUS : OP_MINUS;
 			break;
 		case '*':
 			op = OP_MULTIPLY;
@@ -337,7 +354,6 @@ protected:
 		case '/':
 			op = OP_DIVIDE;
 			break;
-
 		default:
 			return false;
 		}
@@ -381,7 +397,7 @@ using namespace RVD_FORMULA;
 int main(int argc, char* argv[])
 {
 	int ret = 0;
-	char szFormula[]="1.23e4+4";
+	char szFormula[]="1+2*((3+4)*2-6)";
 	STR strFormula = {szFormula, strlen(szFormula)};
 	NODE* pRoot = NULL;
 	{
