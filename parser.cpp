@@ -7,7 +7,7 @@
 
 #include <stdlib.h>
 #include <string.h>
-
+#include <assert.h>
 // formula engine
 
 namespace RVD_FORMULA
@@ -394,21 +394,39 @@ private:
 
 using namespace RVD_FORMULA;
 
-int main(int argc, char* argv[])
+void test(char* szFormula, double result, int type)
 {
-	int ret = 0;
-	char szFormula[]="1+2*((3+4)*2-6)";
 	STR strFormula = {szFormula, strlen(szFormula)};
-	NODE* pRoot = NULL;
-	{
-		Parser parser(strFormula);
-		pRoot = parser.Parse();
-	}
+	Parser parser(strFormula);
+	NODE* pRoot = parser.Parse();
 	if( pRoot )
 	{
-		ret = pRoot->Exec();
+		int ret = pRoot->Exec();
+		assert(!ret);
+		assert(type == pRoot->val.type);
+		switch( type )
+		{
+		case TYPE_int:
+			assert((int)result == pRoot->val.ii);
+			break;
+		case TYPE_double:
+			assert(result == pRoot->val.dd);
+			break;
+		default:
+			assert(false);
+			break;
+		}
 		delete pRoot;
 	}
-	return ret;
+	else if( type != TYPE_void )
+		assert(false);
+}
+
+#define TEST(_expr, _type)		test(#_expr, _expr, _type)
+
+int main(int argc, char* argv[])
+{
+	TEST(1+2*((3+4)*2-6), TYPE_int);
+	return 0;
 }
 
