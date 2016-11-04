@@ -45,6 +45,14 @@ struct STR
 	int		len;
 };
 
+template<class T>
+T	una(T t, char op)
+{
+	if( OP_UNARY_MINUS == op )
+		return -t;
+	return t;
+}
+
 template<class T, class TL, class TR>
 T	bin(TL l, TR r, char op)
 {
@@ -61,15 +69,6 @@ T	bin(TL l, TR r, char op)
 	}
 	return 0;
 }
-
-template <class H, class T>
-struct typelist
-{
-	typedef H head;
-	typedef T tail;
-};
-
-class null_typelist {};
 
 struct VAL
 {
@@ -112,8 +111,24 @@ struct VAL
 		dd = val;
 	}
 
-	int		Bin(const VAL& left, const VAL& right, char op)
+	int		Unary(const VAL& val, char op)
 	{
+		Cleanup();
+		switch( val.type )
+		{
+		case TYPE_int:
+			Set(una(val.ii, op));
+			break;
+		case TYPE_double:
+			Set(una(val.dd, op));
+			break;
+		}
+		return 0;
+	}
+
+	int		Binary(const VAL& left, const VAL& right, char op)
+	{
+		Cleanup();
 		switch( left.type )
 		{
 		case TYPE_int:
@@ -125,48 +140,34 @@ struct VAL
 			case TYPE_double:
 				Set(bin<double, int, double>(left.ii, right.dd, op));
 				break;
-			default:
-				Cleanup();
-				break;
 			}
 			break;
 		case TYPE_double:
 			switch( right.type )
 			{
 			case TYPE_int:
-				Set(bin<double, double, int>(left.ii, right.ii, op));
+				Set(bin<double, double, int>(left.dd, right.ii, op));
 				break;
 			case TYPE_double:
-				Set(bin<double, double, double>(left.ii, right.ii, op));
-				break;
-			default:
-				Cleanup();
+				Set(bin<double, double, double>(left.dd, right.dd, op));
 				break;
 			}
 			break;
-		default:
-			Cleanup();
-			break;
 		}
-
 		return 0;
 	}
 };
 
-struct NODE;
-
-typedef int		(*PFNC)(NODE* p);
-
 // http://en.cppreference.com/w/cpp/language/operator_precedence
-struct	OPENTRY
+struct	OPEntry
 {
 	char	prec;	// precedence (3 is higher than 4 etc)
 	char	dir;	// OPDIR
-	char	count;	// operator node count (2 for binary etc)
+	char	count;	// operator node count (1 for unary, 2 for binary etc)
 };
 
 // order according to enum OP
-static OPENTRY l_ops[] =
+static OPEntry l_ops[] =
 {
 	{0, 0, 0},
 	{6, 0, 2},
@@ -176,82 +177,6 @@ static OPENTRY l_ops[] =
 	{3, 1, 1},
 	{3, 1, 1},
 };
-
-inline bool is_space(char cc)
-{
-	switch( cc )
-	{
-	case ' ':
-	case '\t':
-	case '\r':
-	case '\n':
-		return true;
-	}
-	return false;
-}
-
-inline bool is_digit(char cc)
-{
-	return cc >= '0' && cc <= '9';
-}
-
-inline bool is_exp(char cc)
-{
-	return 'e' == cc || 'E' == cc;
-}
-
-inline char	get_sign(char cc)
-{
-	if( '+' == cc )
-		return 1;
-	else if( '-' == cc )
-		return -1;
-	return 0;
-}
-
-int		atoi(__int64& v, const STR& str, int offset, bool bSign = false)
-{
-	v = 0;
-	if( offset < str.len )
-	{
-		int ii = offset;
-		char sign = 0;
-		if( bSign && (sign = get_sign(str.data[ii])) )
-			ii++;
-		bool bDigits = false;
-		for( ; ii<str.len; ii++)
-		{
-			if( !is_digit(str.data[ii]) )
-				break;
-			if( bDigits )
-				v *= 10;
-			v += str.data[ii] - '0';
-			bDigits = true;
-		}
-		if( bDigits )
-		{
-			if( sign < 0 )
-				v = -v;
-			return ii - offset;
-		}
-	}
-	return 0;
-}
-
-template<class V>
-void	pow(V& v, int n)
-{
-	if( n > 0 )
-	{
-		while( n-- )
-			v *= 10;
-	}
-	else if( n < 0 )
-	{
-		while( n++ )
-			v /= 10;
-	}
-}
 
 struct NODE
 {
@@ -285,8 +210,17 @@ struct NODE
 
 		if( op != OP_NONE )
 		{
-			if( ret = val.Bin(child->next->val, child->val, op) )
-				return ret;
+			switch( l_ops[op].count )
+			{
+			case 1:
+				if( ret = val.Unary(child->val, op) )
+					return ret;
+				break;
+			case 2:
+				if( ret = val.Binary(child->next->val, child->val, op) )
+					return ret;
+				break;
+			}
 		}
 
 		if( next )
@@ -297,15 +231,29 @@ struct NODE
 
 		return ret;
 	}
+
+	void		MakeTree()
+	{
+		if( op != OP_NONE )
+		{
+			NODE* p = this;
+			for(int ii=0; ii<l_ops[op].count; ii++)
+			{
+				p = p->next;
+				p->MakeTree();
+			}
+			child = next;
+			next = p->next;
+			p->next = NULL;
+		}
+	}
 };
 
-struct	PARSER
+class	Parser
 {
-	const STR&	str;
-	int			index;
-
-	PARSER(const STR& strFormula)
-		:	str(strFormula)
+public:
+	Parser(const STR& strFormula)
+		:	_str(strFormula)
 	{
 	}
 
@@ -321,13 +269,13 @@ struct	PARSER
 		#define REMOVE_NODE(_p, _head)	_p = _head, _head = _p->next
 		#define MOVE_NODE				REMOVE_NODE(pTemp, pOps), INSERT_NODE(pTemp, pRoot)
 
-		for(index=0; index<str.len; index++)
+		for(_index=0; _index<_str.len; _index++)
 		{
-			if( is_space(str.data[index]) )
+			if( ParseSpace() )
 				continue;
 
 			OP op;
-			if( Parse(op, pRoot != NULL) )
+			if( ParseOperator(op, pRoot != NULL) )
 			{
 				NODE* pOp = new NODE;
 				pOp->op = op;
@@ -338,26 +286,44 @@ struct	PARSER
 			}
 
 			VAL val;
-			if( Parse(val) )
+			if( ParseVal(val) )
 			{
 				NODE* pNum = new NODE;
 				pNum->val = val;
 				INSERT_NODE(pNum, pRoot);
 				continue;
 			}
+
+			// error
 		}
 
 		while( pOps )
 			MOVE_NODE;
 
+		if( pRoot )
+			pRoot->MakeTree();
+
 		return pRoot;
 	}
 
-	bool	Parse(OP& op, bool bRoot)
+protected:
+	bool	ParseSpace()
+	{
+		switch( _str.data[_index] )
+		{
+		case ' ':
+		case '\t':
+		case '\r':
+		case '\n':
+			return true;
+		}
+		return false;
+	}
+	
+	bool	ParseOperator(OP& op, bool bRoot)
 	{
 		op = OP_NONE;
-
-		switch( str.data[index] )
+		switch( _str.data[_index] )
 		{
 		case '+':
 			op = bRoot ? OP_PLUS : OP_UNARY_PLUS;
@@ -377,94 +343,36 @@ struct	PARSER
 		}
 		return true;
 	}
-
 	
-	bool	Parse(VAL& val)
+	bool	ParseVal(VAL& val)
 	{
-		int offset = index;
-
-		char sign = get_sign(str.data[offset]);
-		if( sign )
-			offset++;
-
-		__int64 vInt;
-		int cInt = atoi(vInt, str, offset);
-		offset += cInt;
-
-		__int64 vFrac;
-		int cFrac = 0;
+		char* pb = _str.data + _index;
+		char* pe = NULL;
+		double dd = strtod(pb, &pe);
+		if( pe == pb )
+			return false;
+		_index += pe - pb - 1;
 		bool bFloat = false;
-		if( offset < str.len && '.' == str.data[offset] )
+		while( pb < pe )
 		{
-			offset++;
-			bFloat = true;
-			cFrac = atoi(vFrac, str, offset);
-			offset += cFrac;
+			if( '.' == *pb )
+			{
+				bFloat = true;
+				break;
+			}
+			pb++;
 		}
-
-		if( cInt || cFrac )
-		{
-			__int64 vExp;
-			int cExp = 0;
-			if( offset < str.len && is_exp(str.data[offset]) )
-			{
-				offset++;
-				cExp = atoi(vExp, str, offset, true);
-				offset += cExp;
-			}
-
-			if( bFloat )
-			{
-				double vFloat = vInt;
-				pow(vFloat, cFrac);
-				vFloat += vFrac;
-				pow(vFloat, vExp - cFrac);
-				if( sign < 0 )
-					vFloat = -vFloat;
-				val.Set(vFloat);
-				index = offset - 1;
-				return true;
-			}
-			else if( cInt )
-			{
-				pow(vInt, cExp);
-				if( sign < 0 )
-					vInt = -vInt;
-				val.Set((int)vInt);
-				index = offset - 1;
-				return true;
-			}
-		}
-
-		return false;
+		if( bFloat )
+			val.Set(dd);
+		else
+			val.Set((int)dd);
+		return true;
 	}
 
+private:
+	const STR&	_str;
+	int			_index;
 };
-
-void		tree(NODE* parent)
-{
-	if( parent->op != OP_NONE )
-	{
-		NODE* p = parent;
-		for(int ii=0; ii<l_ops[parent->op].count; ii++)
-		{
-			p = p->next;
-			tree(p);
-		}
-		parent->child = parent->next;
-		parent->next = p->next;
-		p->next = NULL;
-	}
-}
-
-NODE*		parse(const STR& str)
-{
-	PARSER parser(str);
-	NODE* pRoot = parser.Parse();
-	if( pRoot )
-		tree(pRoot);
-	return pRoot;
-}
 
 }	// namespace RVD_FORMULA
 
@@ -472,11 +380,19 @@ using namespace RVD_FORMULA;
 
 int main(int argc, char* argv[])
 {
-	char szFormula[]="1*2+3*4";
+	int ret = 0;
+	char szFormula[]="1.23e4+4";
 	STR strFormula = {szFormula, strlen(szFormula)};
-	NODE* pNode = parse(strFormula);
-	int nRet = pNode->Exec();
-	delete pNode;
-	return nRet;
+	NODE* pRoot = NULL;
+	{
+		Parser parser(strFormula);
+		pRoot = parser.Parse();
+	}
+	if( pRoot )
+	{
+		ret = pRoot->Exec();
+		delete pRoot;
+	}
+	return ret;
 }
 
