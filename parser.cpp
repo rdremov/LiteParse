@@ -53,6 +53,29 @@ enum TYPE
 	TYPE_str,
 };
 
+inline bool	is_digit(char cc)
+{
+	return cc >= '0' && cc <= '9';
+}
+
+inline bool	is_letter(char cc)
+{
+	return (cc >= 'A' && cc <= 'Z') || (cc >= 'a' && cc <= 'z');
+}
+
+inline bool	is_space(char cc)
+{
+	switch( cc )
+	{
+	case ' ':
+	case '\t':
+	case '\r':
+	case '\n':
+		return true;
+	}
+	return false;
+}
+
 struct STR
 {
 	char*	data;
@@ -64,10 +87,10 @@ struct STR
 		len = 0;
 	}
 
-	void	Init(char* psz)
+	void	Init(char* psz, int l = 0)
 	{
 		data = psz;
-		len = strlen(psz);
+		len = (l > 0) ? l : strlen(psz);
 	}
 
 	void	Free()
@@ -101,6 +124,16 @@ struct STR
 		if( !len )
 			return true;
 		return 0 == memcmp(data, str.data, len);
+	}
+
+	bool	Equal(const char* psz) const
+	{
+		for(int ii=0; ii<len; ii++)
+		{
+			if(data[ii] != *psz++ )
+				return false;
+		}
+		return 0 == *psz;
 	}
 };
 
@@ -144,7 +177,7 @@ struct VAL
 		Init();
 	}
 
-	VAL(const VAL& val);	// empty to prevent compile and use
+	VAL(VAL& val);	//{Transfer(val);}
 
 	VAL(int val)
 	{
@@ -271,6 +304,29 @@ struct VAL
 	}
 };
 
+struct VAR
+{
+	const char*	name;
+	VAL			val;
+};
+
+#define Pi 3.14
+
+static VAR g_vars[] = 
+{
+	{"Pi", VAL(Pi)},
+};
+
+int	find_var(const STR& str)
+{
+	for(int ii=0; ii<_countof(g_vars); ii++)
+	{
+		if( str.Equal(g_vars[ii].name) )
+			return ii;
+	}
+	return -1;
+}
+
 // http://en.cppreference.com/w/cpp/language/operator_precedence
 struct	OPEntry
 {
@@ -296,6 +352,7 @@ struct Node
 	Node*	_next;
 	Node*	_child;
 	char	_op;
+	int		_index;
 	VAL		_val;
 	
 	Node()
@@ -303,12 +360,20 @@ struct Node
 		_next = NULL;
 		_child = NULL;
 		_op = OP_NONE;
+		_index = 0;
 	}
 
 	~Node()
 	{
 		delete _child;
 		delete _next;
+	}
+
+	VAL&	Val()
+	{
+		if( _index > 0 )
+			return g_vars[_index - 1].val;
+		return _val;
 	}
 
 	int		Exec()
@@ -326,17 +391,17 @@ struct Node
 			switch( l_ops[_op].count )
 			{
 			case 1:
-				if( ret = _val.Unary(_child->_val, _op) )
+				if( ret = Val().Unary(_child->Val(), _op) )
 					return ret;
 				break;
 			case 2:
-				if( ret = _val.Binary(_child->_next->_val, _child->_val, _op) )
+				if( ret = Val().Binary(_child->_next->Val(), _child->Val(), _op) )
 					return ret;
 				break;
 			}
 		}
 		else if( _op == OP_PARENTHESIS )
-			_val = _child->_val;
+			Val() = _child->Val();
 
 		if( _next )
 		{
@@ -439,6 +504,22 @@ public:
 				continue;
 			}
 
+			STR var;
+			if( ParseVar(var) )
+			{
+				LAST_ERROR(P_VALUE, E_VAL);
+				int nVar = find_var(var);
+				if( nVar < 0 )
+				{
+					_error = E_VAR;
+					break;
+				}
+				Node* pNum = new Node;
+				pNum->_index = nVar + 1;
+				INSERT_NODE(pNum, pRoot);
+				continue;
+			}
+
 			_error = E_UNKNOWN;
 			break;
 		}
@@ -464,15 +545,7 @@ public:
 protected:
 	bool	ParseSpace()
 	{
-		switch( _str.data[_index] )
-		{
-		case ' ':
-		case '\t':
-		case '\r':
-		case '\n':
-			return true;
-		}
-		return false;
+		return is_space(_str.data[_index]);
 	}
 	
 	bool	ParseOperator(OP& op, bool bFirst)
@@ -506,7 +579,8 @@ protected:
 			{
 				if( '"' == _str.data[ii] )
 				{
-					STR str = {_str.data + _index + 1, ii - _index - 1};
+					STR str;
+					str.Init(_str.data + _index + 1, ii - _index - 1);
 					val.Set(str);
 					_index = ii;
 					return true;
@@ -543,6 +617,25 @@ protected:
 		return true;
 	}
 
+	bool	ParseVar(STR& var)
+	{
+		int ii = _index;
+		for( ; ii<_str.len; ii++)
+		{
+			char cc = _str.data[ii];
+			if( is_letter(cc) || '_' == cc )
+				continue;
+			if( ii > _index && is_digit(cc) )
+				continue;
+			break;
+		}
+		if( ii == _index )
+			return false;
+		var.Init(_str.data + _index, ii - _index);
+		_index = ii;
+		return true;
+	}
+
 private:
 	const STR&	_str;
 	int			_index;
@@ -563,7 +656,7 @@ void test(char* szFormula, const VAL& val)
 	{
 		int ret = pRoot->Exec();
 		assert(!ret);
-		assert(val.Equal(pRoot->_val));
+		assert(val.Equal(pRoot->Val()));
 		delete pRoot;
 	}
 	else if( val.type != TYPE_void )
@@ -574,6 +667,7 @@ void test(char* szFormula, const VAL& val)
 
 int main(int argc, char* argv[])
 {
+	TEST(Pi);
 	TEST("junk");
 	TEST(1+2*((3+4)*2-6));
 	return 0;
