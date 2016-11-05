@@ -13,6 +13,19 @@
 namespace RVD_FORMULA
 {
 
+enum	ERROR
+{
+	E_NONE,
+	E_UNKNOWN,
+	E_QUOTE,
+	E_PARENTHESIS,
+	E_VAL,
+	E_OP,
+	E_VAR,
+	E_FUNC,
+	E_OVERFLOW,
+};
+
 enum OP
 {
 	OP_NONE,
@@ -353,38 +366,53 @@ struct Node
 
 class	Parser
 {
+	enum PARSE
+	{
+		P_OPERATOR = 1,
+		P_VALUE,
+	};
+
 public:
 	Parser(const STR& strFormula)
-		:	_str(strFormula), _index(0)
+		:	_str(strFormula), _index(0), _error(E_NONE)
 	{
 	}
 
-	Node*	Parse()
+	Node*	Parse(bool bParenthesis = false)
 	{
 		Node* pRoot = NULL;
 		Node* pOps = NULL;
 		Node* pTemp;
+		int nLast = 0;
 
 		// https://en.wikipedia.org/wiki/Shunting-yard_algorithm
 
 		#define INSERT_NODE(_p, _head)	_p->_next = _head, _head = _p
 		#define REMOVE_NODE(_p, _head)	_p = _head, _head = _p->_next
 		#define MOVE_NODE				REMOVE_NODE(pTemp, pOps), INSERT_NODE(pTemp, pRoot)
+		#define LAST_ERROR(_curr, _err)	if(nLast == _curr){_error = _err; break;} else nLast = _curr
 
 		for( ; _index<_str.len; _index++)
 		{
+			if( _error )
+				break;
+
 			if( ParseSpace() )
 				continue;
 
 			if(  ')' == _str.data[_index] )
+			{
+				bParenthesis = !bParenthesis;
 				break;
+			}
 
 			if( '(' == _str.data[_index] )
 			{
 				_index++;
+				LAST_ERROR(P_VALUE, E_PARENTHESIS);
 				Node* pParent = new Node;
 				pParent->_op = OP_PARENTHESIS;
-				pParent->_child = Parse();
+				pParent->_child = Parse(true);
 				INSERT_NODE(pParent, pRoot);
 				continue;
 			}
@@ -392,6 +420,7 @@ public:
 			OP op;
 			if( ParseOperator(op, !pRoot) )
 			{
+				LAST_ERROR(P_OPERATOR, E_OP);
 				Node* pOp = new Node;
 				pOp->_op = op;
 				while( pOps && l_ops[op].prec >= l_ops[pOps->_op].prec )
@@ -403,13 +432,24 @@ public:
 			VAL val;
 			if( ParseVal(val) )
 			{
+				LAST_ERROR(P_VALUE, E_VAL);
 				Node* pNum = new Node;
 				pNum->_val.Transfer(val);
 				INSERT_NODE(pNum, pRoot);
 				continue;
 			}
 
-			// error
+			_error = E_UNKNOWN;
+			break;
+		}
+
+		if( bParenthesis )
+			_error = E_PARENTHESIS;
+
+		if( _error )
+		{
+			delete pRoot;
+			return NULL;
 		}
 
 		while( pOps )
@@ -468,9 +508,11 @@ protected:
 				{
 					STR str = {_str.data + _index + 1, ii - _index - 1};
 					val.Set(str);
+					_index = ii;
 					return true;
 				}
 			}
+			_error = E_QUOTE;
 			return false;
 		}
 		char* pb = _str.data + _index;
@@ -478,6 +520,11 @@ protected:
 		double dd = strtod(pb, &pe);
 		if( pe == pb )
 			return false;
+		//if( dd == HUGE_VAL || dd == -HUGE_VAL )
+		//{
+		//	_error = E_OVERFLOW;
+		//	return false;
+		//}
 		_index += pe - pb - 1;
 		bool bFloat = false;
 		while( pb < pe )
@@ -499,6 +546,7 @@ protected:
 private:
 	const STR&	_str;
 	int			_index;
+	int			_error;
 };
 
 }	// namespace RVD_FORMULA
