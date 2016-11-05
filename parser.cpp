@@ -12,7 +12,6 @@
 
 namespace RVD_FORMULA
 {
-#define	FA
 
 enum OP
 {
@@ -38,13 +37,58 @@ enum TYPE
 	TYPE_void,
 	TYPE_int,
 	TYPE_double,
-	TYPE_string,
+	TYPE_str,
 };
 
 struct STR
 {
 	char*	data;
 	int		len;
+
+	void	Init()
+	{
+		data = NULL;
+		len = 0;
+	}
+
+	void	Init(char* psz)
+	{
+		data = psz;
+		len = strlen(psz);
+	}
+
+	void	Free()
+	{
+		if( data )
+		{
+			delete[] data;
+			Init();
+		}
+	}
+
+	void	Copy(const STR& str)
+	{
+		Free();
+		if( str.len > 0 )
+		{
+			if( data = new char[str.len+1] )
+			{
+				data[str.len] = 0;
+				if( str.data )
+					memcpy(data, str.data, str.len);
+				len = str.len;
+			}
+		}
+	}
+
+	bool	Equal(const STR& str) const
+	{
+		if( len != str.len )
+			return false;
+		if( !len )
+			return true;
+		return 0 == memcmp(data, str.data, len);
+	}
 };
 
 template<class T>
@@ -74,7 +118,7 @@ T	bin(TL l, TR r, char op)
 
 struct VAL
 {
-	int		type;
+	char		type;
 	union
 	{
 		int		ii;
@@ -84,7 +128,29 @@ struct VAL
 
 	VAL()
 	{
-		type = TYPE_void;
+		Init();
+	}
+
+	VAL(const VAL& val);	// empty to prevent compile and use
+
+	VAL(int val)
+	{
+		Init();
+		Set(val);
+	}
+	
+	VAL(double val)
+	{
+		Init();
+		Set(val);
+	}
+	
+	VAL(char* psz)
+	{
+		Init();
+		STR val;
+		val.Init(psz);
+		Set(val);
 	}
 
 	~VAL()
@@ -92,25 +158,39 @@ struct VAL
 		Cleanup();
 	}
 
+	void	Init()
+	{
+		type = TYPE_void;
+		str.Init();
+	}
+
 	void	Cleanup()
 	{
+		if( type == TYPE_str )
+			str.Free();
 		type = TYPE_void;
 	}
 
-	void	Set(int val)
+	bool	Equal(const VAL& val) const
 	{
-		if( type != TYPE_int )
-			Cleanup();
-		type = TYPE_int;
-		ii = val;
+		if( type != val.type )
+			return false;
+		switch( type )
+		{
+		case TYPE_int:
+			return ii == val.ii;
+		case TYPE_double:
+			return dd == val.dd;
+		case TYPE_str:
+			return str.Equal(val.str);
+		}
+		return true;
 	}
 
-	void	Set(double val)
+	void	Transfer(VAL& val)
 	{
-		if( type != TYPE_double )
-			Cleanup();
-		type = TYPE_double;
-		dd = val;
+		memcpy(this, &val, sizeof(VAL));
+		val.Init();
 	}
 
 	int		Unary(const VAL& val, char op)
@@ -158,6 +238,24 @@ struct VAL
 		}
 		return 0;
 	}
+
+	void	Set(int val)
+	{
+		type = TYPE_int;
+		ii = val;
+	}
+
+	void	Set(double val)
+	{
+		type = TYPE_double;
+		dd = val;
+	}
+
+	void	Set(const STR& val)
+	{
+		type = TYPE_str;
+		str.Copy(val);
+	}
 };
 
 // http://en.cppreference.com/w/cpp/language/operator_precedence
@@ -180,56 +278,56 @@ static OPEntry l_ops[] =
 	{3, 1, 1},
 };
 
-struct NODE
+struct Node
 {
-	NODE*	next;
-	NODE*	child;
-	char	op;
-	VAL		val;
+	Node*	_next;
+	Node*	_child;
+	char	_op;
+	VAL		_val;
 	
-	NODE()
+	Node()
 	{
-		next = NULL;
-		child = NULL;
-		op = OP_NONE;
+		_next = NULL;
+		_child = NULL;
+		_op = OP_NONE;
 	}
 
-	~NODE()
+	~Node()
 	{
-		delete child;
-		delete next;
+		delete _child;
+		delete _next;
 	}
 
 	int		Exec()
 	{
 		int ret = 0;
 
-		if( child )
+		if( _child )
 		{
-			if( ret = child->Exec() )
+			if( ret = _child->Exec() )
 				return ret;
 		}
 
-		if( op > OP_NONE )
+		if( _op > OP_NONE )
 		{
-			switch( l_ops[op].count )
+			switch( l_ops[_op].count )
 			{
 			case 1:
-				if( ret = val.Unary(child->val, op) )
+				if( ret = _val.Unary(_child->_val, _op) )
 					return ret;
 				break;
 			case 2:
-				if( ret = val.Binary(child->next->val, child->val, op) )
+				if( ret = _val.Binary(_child->_next->_val, _child->_val, _op) )
 					return ret;
 				break;
 			}
 		}
-		else if( op == OP_PARENTHESIS )
-			val = child->val;
+		else if( _op == OP_PARENTHESIS )
+			_val = _child->_val;
 
-		if( next )
+		if( _next )
 		{
-			if( ret = next->Exec() )
+			if( ret = _next->Exec() )
 				return ret;
 		}
 
@@ -238,17 +336,17 @@ struct NODE
 
 	void		MakeTree()
 	{
-		if( op > OP_NONE )
+		if( _op > OP_NONE )
 		{
-			NODE* p = this;
-			for(int ii=0; ii<l_ops[op].count; ii++)
+			Node* p = this;
+			for(int ii=0; ii<l_ops[_op].count; ii++)
 			{
-				p = p->next;
+				p = p->_next;
 				p->MakeTree();
 			}
-			child = next;
-			next = p->next;
-			p->next = NULL;
+			_child = _next;
+			_next = p->_next;
+			p->_next = NULL;
 		}
 	}
 };
@@ -261,16 +359,16 @@ public:
 	{
 	}
 
-	NODE*	Parse()
+	Node*	Parse()
 	{
-		NODE* pRoot = NULL;
-		NODE* pOps = NULL;
-		NODE* pTemp;
+		Node* pRoot = NULL;
+		Node* pOps = NULL;
+		Node* pTemp;
 
 		// https://en.wikipedia.org/wiki/Shunting-yard_algorithm
 
-		#define INSERT_NODE(_p, _head)	_p->next = _head, _head = _p
-		#define REMOVE_NODE(_p, _head)	_p = _head, _head = _p->next
+		#define INSERT_NODE(_p, _head)	_p->_next = _head, _head = _p
+		#define REMOVE_NODE(_p, _head)	_p = _head, _head = _p->_next
 		#define MOVE_NODE				REMOVE_NODE(pTemp, pOps), INSERT_NODE(pTemp, pRoot)
 
 		for( ; _index<_str.len; _index++)
@@ -284,9 +382,9 @@ public:
 			if( '(' == _str.data[_index] )
 			{
 				_index++;
-				NODE* pParent = new NODE;
-				pParent->op = OP_PARENTHESIS;
-				pParent->child = Parse();
+				Node* pParent = new Node;
+				pParent->_op = OP_PARENTHESIS;
+				pParent->_child = Parse();
 				INSERT_NODE(pParent, pRoot);
 				continue;
 			}
@@ -294,9 +392,9 @@ public:
 			OP op;
 			if( ParseOperator(op, !pRoot) )
 			{
-				NODE* pOp = new NODE;
-				pOp->op = op;
-				while( pOps && l_ops[op].prec >= l_ops[pOps->op].prec )
+				Node* pOp = new Node;
+				pOp->_op = op;
+				while( pOps && l_ops[op].prec >= l_ops[pOps->_op].prec )
 					MOVE_NODE;
 				INSERT_NODE(pOp, pOps);
 				continue;
@@ -305,8 +403,8 @@ public:
 			VAL val;
 			if( ParseVal(val) )
 			{
-				NODE* pNum = new NODE;
-				pNum->val = val;
+				Node* pNum = new Node;
+				pNum->_val.Transfer(val);
 				INSERT_NODE(pNum, pRoot);
 				continue;
 			}
@@ -362,6 +460,19 @@ protected:
 	
 	bool	ParseVal(VAL& val)
 	{
+		if( '"' == _str.data[_index] )
+		{
+			for(int ii = _index + 1; ii<_str.len; ii++)
+			{
+				if( '"' == _str.data[ii] )
+				{
+					STR str = {_str.data + _index + 1, ii - _index - 1};
+					val.Set(str);
+					return true;
+				}
+			}
+			return false;
+		}
 		char* pb = _str.data + _index;
 		char* pe = NULL;
 		double dd = strtod(pb, &pe);
@@ -394,39 +505,29 @@ private:
 
 using namespace RVD_FORMULA;
 
-void test(char* szFormula, double result, int type)
+void test(char* szFormula, const VAL& val)
 {
-	STR strFormula = {szFormula, strlen(szFormula)};
+	STR strFormula;
+	strFormula.Init(szFormula);
 	Parser parser(strFormula);
-	NODE* pRoot = parser.Parse();
+	Node* pRoot = parser.Parse();
 	if( pRoot )
 	{
 		int ret = pRoot->Exec();
 		assert(!ret);
-		assert(type == pRoot->val.type);
-		switch( type )
-		{
-		case TYPE_int:
-			assert((int)result == pRoot->val.ii);
-			break;
-		case TYPE_double:
-			assert(result == pRoot->val.dd);
-			break;
-		default:
-			assert(false);
-			break;
-		}
+		assert(val.Equal(pRoot->_val));
 		delete pRoot;
 	}
-	else if( type != TYPE_void )
+	else if( val.type != TYPE_void )
 		assert(false);
 }
 
-#define TEST(_expr, _type)		test(#_expr, _expr, _type)
+#define TEST(_expr)		test(#_expr, VAL(_expr))
 
 int main(int argc, char* argv[])
 {
-	TEST(1+2*((3+4)*2-6), TYPE_int);
+	TEST("junk");
+	TEST(1+2*((3+4)*2-6));
 	return 0;
 }
 
