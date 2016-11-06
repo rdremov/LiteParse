@@ -8,7 +8,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <assert.h>
-// formula engine
+#include <math.h>
 
 namespace RVD_FORMULA
 {
@@ -23,6 +23,7 @@ enum	ERROR
 	E_OP,
 	E_VAR,
 	E_FUNC,
+	E_ARG,
 	E_OVERFLOW,
 };
 
@@ -37,6 +38,8 @@ enum OP
 	OP_UNARY_MINUS,
 
 	OP_PARENTHESIS = -100,
+	OP_VAR,
+	OP_FUNC,
 };
 
 enum OPDIR
@@ -304,17 +307,22 @@ struct VAL
 	}
 };
 
+
+#define Pi	3.14159265359
+#define e	2.71828182846
+
 struct VAR
 {
 	const char*	name;
 	VAL			val;
 };
 
-#define Pi 3.14
+#define VARENTRY(_var)		{#_var, _var}
 
 static VAR g_vars[] = 
 {
-	{"Pi", VAL(Pi)},
+	VARENTRY(Pi),
+	VARENTRY(e),
 };
 
 int	find_var(const STR& str)
@@ -322,6 +330,46 @@ int	find_var(const STR& str)
 	for(int ii=0; ii<_countof(g_vars); ii++)
 	{
 		if( str.Equal(g_vars[ii].name) )
+			return ii;
+	}
+	return -1;
+}
+
+typedef void	(*PFNVAL1)(VAL&, const VAL&);
+
+struct FUNC
+{
+	const char*	name;
+	void*		pfn;
+	char		nargs;
+};
+
+void sin(VAL& valRet, const VAL& val)
+{
+	valRet.Cleanup();
+	switch( val.type )
+	{
+	case TYPE_int:
+		valRet.Set(::sin((double)val.ii));
+		break;
+	case TYPE_double:
+		valRet.Set(::sin(val.dd));
+		break;
+	}
+}
+
+#define FUNCENTRY(_fn, _nargs)		{#_fn, &_fn, _nargs}
+
+static FUNC g_funcs[] = 
+{
+	FUNCENTRY(sin, 1),
+};
+
+int	find_func(const STR& str)
+{
+	for(int ii=0; ii<_countof(g_funcs); ii++)
+	{
+		if( str.Equal(g_funcs[ii].name) )
 			return ii;
 	}
 	return -1;
@@ -371,7 +419,7 @@ struct Node
 
 	VAL&	Val()
 	{
-		if( _index > 0 )
+		if( _op == OP_VAR && _index > 0 )
 			return g_vars[_index - 1].val;
 		return _val;
 	}
@@ -400,8 +448,25 @@ struct Node
 				break;
 			}
 		}
-		else if( _op == OP_PARENTHESIS )
-			Val() = _child->Val();
+		else if( _op < 0 )
+		{
+			switch( _op )
+			{
+			case OP_FUNC:
+				switch( g_funcs[_index-1].nargs )
+				{
+				case 1:
+					((PFNVAL1)g_funcs[_index-1].pfn)(Val(), _child->Val());
+					break;
+				}
+				break;
+			case OP_VAR:
+				break;
+			case OP_PARENTHESIS:
+				Val() = _child->Val();
+				break;
+			}
+		}
 
 		if( _next )
 		{
@@ -507,7 +572,29 @@ public:
 			STR var;
 			if( ParseVar(var) )
 			{
-				LAST_ERROR(P_VALUE, E_VAL);
+				LAST_ERROR(P_VALUE, E_VAR);
+				for( ; _index<_str.len-1; _index++)
+				{
+					if( !is_space(_str.data[_index]) )
+						break;
+				}		
+				if( '(' == _str.data[_index] )
+				{
+					int nFunc = find_func(var);
+					if( nFunc < 0 )
+					{
+						_error = E_FUNC;
+						break;
+					}
+					_index++;
+					Node* pFunc = new Node;
+					pFunc->_op = OP_FUNC;
+					pFunc->_index = nFunc + 1;
+					pFunc->_child = Parse(true);
+					INSERT_NODE(pFunc, pRoot);
+					continue;
+				}
+
 				int nVar = find_var(var);
 				if( nVar < 0 )
 				{
@@ -515,6 +602,7 @@ public:
 					break;
 				}
 				Node* pNum = new Node;
+				pNum->_op = OP_VAR;
 				pNum->_index = nVar + 1;
 				INSERT_NODE(pNum, pRoot);
 				continue;
@@ -667,6 +755,7 @@ void test(char* szFormula, const VAL& val)
 
 int main(int argc, char* argv[])
 {
+	TEST(sin(3.));
 	TEST(Pi);
 	TEST("junk");
 	TEST(1+2*((3+4)*2-6));
