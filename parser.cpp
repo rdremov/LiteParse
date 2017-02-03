@@ -2,7 +2,7 @@
 // Purpose:		Parse and calculate math formula expression
 // Author:		Roman Dremov
 // Date:		November 2016
-// Usage:		parser [-acdhruvw] gitolite.log
+// Usage:		see void test(char* szFormula, const VAL& val)
 //---------------------------------------------------------------------------
 
 #include <stdlib.h>
@@ -17,6 +17,7 @@ enum	ERROR
 {
 	E_NONE,
 	E_UNKNOWN,
+	E_COMMA,
 	E_QUOTE,
 	E_PARENTHESIS,
 	E_VAL,
@@ -38,6 +39,7 @@ enum OP
 	OP_UNARY_MINUS,
 
 	OP_PARENTHESIS = -100,
+	OP_CONST,
 	OP_VAR,
 	OP_FUNC,
 };
@@ -305,63 +307,65 @@ struct VAL
 		type = TYPE_str;
 		str.Copy(val);
 	}
+
+	double	Get()
+	{
+		switch( type )
+		{
+		case TYPE_int:
+			return ii;
+		case TYPE_double:
+			return dd;
+		}
+		return 0;
+	}
 };
 
-
-#define Pi	3.14159265359
-#define e	2.71828182846
-
-struct VAR
+struct CONSTANT
 {
 	const char*	name;
 	VAL			val;
 };
 
-#define VARENTRY(_var)		{#_var, _var}
+#define Pi	3.14159265359
+#define e	2.71828182846
 
-static VAR g_vars[] = 
+#define CONSTENTRY(_v)		{#_v, _v}
+
+static CONSTANT g_consts[] = 
 {
-	VARENTRY(Pi),
-	VARENTRY(e),
+	CONSTENTRY(Pi),
+	CONSTENTRY(e),
 };
 
-int	find_var(const STR& str)
+int	find_const(const STR& str)
 {
-	for(int ii=0; ii<_countof(g_vars); ii++)
+	for(int ii=0; ii<_countof(g_consts); ii++)
 	{
-		if( str.Equal(g_vars[ii].name) )
+		if( str.Equal(g_consts[ii].name) )
 			return ii;
 	}
 	return -1;
 }
 
-typedef void	(*PFNVAL1)(VAL&, const VAL&);
+struct Node;
+typedef void (*PFNNode)(Node&);
 
 struct FUNC
 {
 	const char*	name;
-	void*		pfn;
+	PFNNode		pfn;
 	char		nargs;
 };
 
-void sin(VAL& valRet, const VAL& val)
-{
-	valRet.Cleanup();
-	switch( val.type )
-	{
-	case TYPE_int:
-		valRet.Set(::sin((double)val.ii));
-		break;
-	case TYPE_double:
-		valRet.Set(::sin(val.dd));
-		break;
-	}
-}
+static void sin(Node& node);
+static void min(Node& node);
 
 #define FUNCENTRY(_fn, _nargs)		{#_fn, &_fn, _nargs}
 
 static FUNC g_funcs[] = 
 {
+	FUNCENTRY(min, 2),
 	FUNCENTRY(sin, 1),
 };
 
@@ -386,13 +390,13 @@ struct	OPEntry
 // order according to enum OP
 static OPEntry l_ops[] =
 {
-	{0, 0, 0},
-	{6, 0, 2},
-	{6, 0, 2},
-	{5, 0, 2},
-	{5, 0, 2},
-	{3, 1, 1},
-	{3, 1, 1},
+	{0, 0, 0},		// OP_NONE
+	{6, 0, 2},		// OP_PLUS
+	{6, 0, 2},		// OP_MINUS
+	{5, 0, 2},		// OP_MULTIPLY
+	{5, 0, 2},		// OP_DIVIDE
+	{3, 1, 1},		// OP_UNARY_PLUS
+	{3, 1, 1},		// OP_UNARY_MINUS
 };
 
 struct Node
@@ -419,9 +423,38 @@ struct Node
 
 	VAL&	Val()
 	{
-		if( _op == OP_VAR && _index > 0 )
-			return g_vars[_index - 1].val;
+		if( _op == OP_CONST && _index > 0 )
+			return g_consts[_index - 1].val;
 		return _val;
+	}
+
+	int		GetChildrenCount()
+	{
+		if( !_child )
+			return 0;
+		return _child->GetCount();
+	}
+
+	int		GetCount()
+	{
+		int nCount = 1;
+		Node* next = _next;
+		while( next )
+		{
+			nCount++;
+			next = next->_next;
+		}
+		return nCount;
+	}
+
+	int		Test()
+	{
+		if( OP_FUNC == _op )
+		{
+			if( g_funcs[_index-1].nargs != GetChildrenCount() )
+				return E_ARG;
+		}
+		return E_NONE;
 	}
 
 	int		Exec()
@@ -453,12 +486,7 @@ struct Node
 			switch( _op )
 			{
 			case OP_FUNC:
-				switch( g_funcs[_index-1].nargs )
-				{
-				case 1:
-					((PFNVAL1)g_funcs[_index-1].pfn)(Val(), _child->Val());
-					break;
-				}
+				g_funcs[_index-1].pfn(*this);
 				break;
 			case OP_VAR:
 				break;
@@ -494,6 +522,21 @@ struct Node
 	}
 };
 
+void sin(Node& node)
+{
+	node.Val().Set(::sin(node._child->Val().Get()));
+}
+
+double	min(double d1, double d2)
+{
+	return (d1 < d2) ? d1 : d2;
+}
+
+void min(Node& node)
+{
+	node.Val().Set(min(node._child->_next->Val().Get(), node._child->Val().Get()));
+}
+
 class	Parser
 {
 	enum PARSE
@@ -513,7 +556,7 @@ public:
 		Node* pRoot = NULL;
 		Node* pOps = NULL;
 		Node* pTemp;
-		int nLast = 0;
+		int nLast = P_OPERATOR;
 
 		// https://en.wikipedia.org/wiki/Shunting-yard_algorithm
 
@@ -529,6 +572,12 @@ public:
 
 			if( ParseSpace() )
 				continue;
+
+			if( ',' == _str.data[_index] )
+			{
+				LAST_ERROR(P_OPERATOR, E_COMMA);
+				continue;
+			}
 
 			if(  ')' == _str.data[_index] )
 			{
@@ -550,6 +599,8 @@ public:
 			OP op;
 			if( ParseOperator(op, !pRoot) )
 			{
+				if( 1 == l_ops[op].count )
+					nLast = 0;
 				LAST_ERROR(P_OPERATOR, E_OP);
 				Node* pOp = new Node;
 				pOp->_op = op;
@@ -569,8 +620,8 @@ public:
 				continue;
 			}
 
-			STR var;
-			if( ParseVar(var) )
+			STR name;
+			if( ParseName(name) )
 			{
 				LAST_ERROR(P_VALUE, E_VAR);
 				for( ; _index<_str.len-1; _index++)
@@ -580,7 +631,7 @@ public:
 				}		
 				if( '(' == _str.data[_index] )
 				{
-					int nFunc = find_func(var);
+					int nFunc = find_func(name);
 					if( nFunc < 0 )
 					{
 						_error = E_FUNC;
@@ -591,20 +642,22 @@ public:
 					pFunc->_op = OP_FUNC;
 					pFunc->_index = nFunc + 1;
 					pFunc->_child = Parse(true);
+					if( _error = pFunc->Test() )
+						break;
 					INSERT_NODE(pFunc, pRoot);
 					continue;
 				}
 
-				int nVar = find_var(var);
-				if( nVar < 0 )
+				int nConst = find_const(name);
+				if( nConst < 0 )
 				{
 					_error = E_VAR;
 					break;
 				}
-				Node* pNum = new Node;
-				pNum->_op = OP_VAR;
-				pNum->_index = nVar + 1;
-				INSERT_NODE(pNum, pRoot);
+				Node* pConst = new Node;
+				pConst->_op = OP_CONST;
+				pConst->_index = nConst + 1;
+				INSERT_NODE(pConst, pRoot);
 				continue;
 			}
 
@@ -705,7 +758,7 @@ protected:
 		return true;
 	}
 
-	bool	ParseVar(STR& var)
+	bool	ParseName(STR& var)
 	{
 		int ii = _index;
 		for( ; ii<_str.len; ii++)
@@ -755,6 +808,8 @@ void test(char* szFormula, const VAL& val)
 
 int main(int argc, char* argv[])
 {
+	TEST(-1-2);
+	TEST(min(3,2.));
 	TEST(sin(3.));
 	TEST(Pi);
 	TEST("junk");
