@@ -451,7 +451,8 @@ struct Node
 	{
 		if( OP_FUNC == _op )
 		{
-			if( g_funcs[_index-1].nargs != GetChildrenCount() )
+			int nCount = GetChildrenCount();
+			if( g_funcs[_index-1].nargs != nCount )
 				return E_ARG;
 		}
 		return E_NONE;
@@ -654,6 +655,7 @@ public:
 					_error = E_VAR;
 					break;
 				}
+				_index--;
 				Node* pConst = new Node;
 				pConst->_op = OP_CONST;
 				pConst->_index = nConst + 1;
@@ -808,6 +810,7 @@ void test(char* szFormula, const VAL& val)
 
 int main(int argc, char* argv[])
 {
+	TEST(-2*sin(-Pi/3));
 	TEST(-1-2);
 	TEST(min(3,2.));
 	TEST(sin(3.));
