@@ -40,7 +40,6 @@ enum OP
 
 	OP_PARENTHESIS = -100,
 	OP_CONST,
-	OP_VAR,
 	OP_FUNC,
 };
 
@@ -48,14 +47,6 @@ enum OPDIR
 {
 	OPDIR_LR,
 	OPDIR_RL,
-};
-
-enum TYPE
-{
-	TYPE_void,
-	TYPE_int,
-	TYPE_double,
-	TYPE_str,
 };
 
 inline bool	is_digit(char cc)
@@ -81,6 +72,18 @@ inline bool	is_space(char cc)
 	return false;
 }
 
+inline int	safe_str_len(const char* psz, int len)
+{
+	if( len < 0 )
+	{
+		if( psz )
+			return (int)strlen(psz);
+		return 0;
+	}
+	return len;
+}
+
+// lightweight string - caller decides if data is shared or copied
 struct STR
 {
 	char*	data;
@@ -92,10 +95,10 @@ struct STR
 		len = 0;
 	}
 
-	void	Init(char* psz, int l = 0)
+	void	Init(char* psz, int l = -1)
 	{
 		data = psz;
-		len = (l > 0) ? l : strlen(psz);
+		len = safe_str_len(psz, l);
 	}
 
 	void	Free()
@@ -167,164 +170,215 @@ T	bin(TL l, TR r, char op)
 	return 0;
 }
 
-struct VAL
+#define EXP_TYPE	0x7FF
+
+// compact generic value to represent int, double, STR etc
+// compression based on IEEE-754 double NaN when exp=0x7FF
+// https://en.wikipedia.org/wiki/Double-precision_floating-point_format
+class Val
 {
-	char		type;
-	union
+private:
+	enum
 	{
-		int		ii;
-		double	dd;
-		STR		str;
+		T_void = 1,
+		T_int,
+		T_sz,		// short string up to 6 bytes to avoid alloc
+		T_pstr,		// any string longer than 6 bytes
 	};
 
-	VAL()
+	// Little Endian
+	union
+	{
+		struct
+		{
+			unsigned int	_f3:32;
+			unsigned int	_f2:16;
+			unsigned int	_f1:4;
+			unsigned int	_exp:11;
+			unsigned int	_sign:1;
+		};
+		int		_i;
+		double	_d;
+		STR*	_pstr;	// fits 6 byte pointers
+		char	_sz[6];	// fits into _f2 and _f3
+	};
+
+public:
+	Val()
 	{
 		Init();
 	}
 
-	VAL(VAL& val);	//{Transfer(val);}
+	Val(Val& val);	//{Transfer(val);}
 
-	VAL(int val)
+	Val(int val)
 	{
-		Init();
-		Set(val);
+		Init(T_int);
+		_i = val;
 	}
 	
-	VAL(double val)
+	Val(double val)
 	{
-		Init();
-		Set(val);
+		_d = val;
 	}
 	
-	VAL(char* psz)
+	Val(const char* psz)
 	{
 		Init();
-		STR val;
-		val.Init(psz);
-		Set(val);
+		Set(psz);
 	}
 
-	~VAL()
+	~Val()
 	{
 		Cleanup();
 	}
 
-	void	Init()
+	void	Init(int type = T_void)
 	{
-		type = TYPE_void;
-		str.Init();
+		_exp = EXP_TYPE;
+		_f1 = type;
 	}
 
 	void	Cleanup()
 	{
-		if( type == TYPE_str )
-			str.Free();
-		type = TYPE_void;
-	}
-
-	bool	Equal(const VAL& val) const
-	{
-		if( type != val.type )
-			return false;
-		switch( type )
+		if( _exp == EXP_TYPE && _f1 == T_pstr )
 		{
-		case TYPE_int:
-			return ii == val.ii;
-		case TYPE_double:
-			return dd == val.dd;
-		case TYPE_str:
-			return str.Equal(val.str);
+			_pstr->Free();
+			delete _pstr;
 		}
-		return true;
+		Init();
 	}
 
-	void	Transfer(VAL& val)
+	bool	Equal(const Val& val) const
 	{
-		memcpy(this, &val, sizeof(VAL));
+		if( _exp == EXP_TYPE || val._exp == EXP_TYPE )
+		{
+			if( _exp != val._exp )
+				return false;
+			if( _f1 != val._f1 )
+				return false;
+			switch( _f1 )
+			{
+			case T_int:
+				return _i == val._i;
+			case T_sz:
+				return 0 == strcmp(_sz, val._sz);
+			}
+		}
+		return _d == val._d;
+	}
+
+	void	Transfer(Val& val)
+	{
+		memcpy(this, &val, sizeof(Val));
 		val.Init();
 	}
 
-	int		Unary(const VAL& val, char op)
+	int		Unary(const Val& val, char op)
 	{
 		Cleanup();
-		switch( val.type )
+		if( val._exp == EXP_TYPE )
 		{
-		case TYPE_int:
-			Set(una(val.ii, op));
-			break;
-		case TYPE_double:
-			Set(una(val.dd, op));
-			break;
+			switch( val._f1 )
+			{
+			case T_int:
+				Set(una(val._i, op));
+				return 0;
+			}
 		}
+		Set(una(val._d, op));
 		return 0;
 	}
 
-	int		Binary(const VAL& left, const VAL& right, char op)
+	int		Binary(const Val& left, const Val& right, char op)
 	{
 		Cleanup();
-		switch( left.type )
+		if( left._exp == EXP_TYPE )
 		{
-		case TYPE_int:
-			switch( right.type )
+			switch( left._f1 )
 			{
-			case TYPE_int:
-				Set(bin<int, int, int>(left.ii, right.ii, op));
-				break;
-			case TYPE_double:
-				Set(bin<double, int, double>(left.ii, right.dd, op));
+			case T_int:
+				if( right._exp == EXP_TYPE )
+				{
+					switch( right._f1 )
+					{
+					case T_int:
+						Set(bin<int, int, int>(left._i, right._i, op));
+						break;
+					}
+				}
+				else
+					Set(bin<double, int, double>(left._i, right._d, op));
 				break;
 			}
-			break;
-		case TYPE_double:
-			switch( right.type )
-			{
-			case TYPE_int:
-				Set(bin<double, double, int>(left.dd, right.ii, op));
-				break;
-			case TYPE_double:
-				Set(bin<double, double, double>(left.dd, right.dd, op));
-				break;
-			}
-			break;
 		}
+		else if( right._exp == EXP_TYPE )
+		{
+			switch( right._f1 )
+			{
+			case T_int:
+				Set(bin<double, double, int>(left._d, right._i, op));
+				break;
+			}
+		}
+		else
+			Set(bin<double, double, double>(left._d, right._d, op));
 		return 0;
+	}
+
+	double	Get() const
+	{
+		if( _exp == EXP_TYPE )
+		{
+			switch( _f1 )
+			{
+			case T_int:
+				return _i;
+			}
+		}
+		return _d;
+	}
+
+	bool	IsVoid() const
+	{
+		return (_exp == EXP_TYPE) && (_f1 == T_void);
 	}
 
 	void	Set(int val)
 	{
-		type = TYPE_int;
-		ii = val;
+		Init(T_int);
+		_i = val;
 	}
 
 	void	Set(double val)
 	{
-		type = TYPE_double;
-		dd = val;
+		_d = val;
 	}
 
-	void	Set(const STR& val)
+	void	Set(const char* psz, int len = -1)
 	{
-		type = TYPE_str;
-		str.Copy(val);
-	}
-
-	double	Get()
-	{
-		switch( type )
+		len = safe_str_len(psz, len);
+		if( len < 6 )
 		{
-		case TYPE_int:
-			return ii;
-		case TYPE_double:
-			return dd;
+			Init(T_sz);
+			memcpy(_sz, psz, len);
+			_sz[len] = 0;
 		}
-		return 0;
+		else
+		{
+			Init(T_pstr);
+			_pstr = new STR;
+			STR str;
+			str.Init((char*)psz, len);
+			_pstr->Copy(str);
+		}
 	}
 };
 
 struct CONSTANT
 {
 	const char*	name;
-	VAL			val;
+	Val			val;
 };
 
 #define Pi	3.14159265359
@@ -405,7 +459,7 @@ struct Node
 	Node*	_child;
 	char	_op;
 	int		_index;
-	VAL		_val;
+	Val		_val;
 	
 	Node()
 	{
@@ -421,7 +475,7 @@ struct Node
 		delete _next;
 	}
 
-	VAL&	Val()
+	Val&	V()
 	{
 		if( _op == OP_CONST && _index > 0 )
 			return g_consts[_index - 1].val;
@@ -473,11 +527,11 @@ struct Node
 			switch( l_ops[_op].count )
 			{
 			case 1:
-				if( ret = Val().Unary(_child->Val(), _op) )
+				if( ret = V().Unary(_child->V(), _op) )
 					return ret;
 				break;
 			case 2:
-				if( ret = Val().Binary(_child->_next->Val(), _child->Val(), _op) )
+				if( ret = V().Binary(_child->_next->V(), _child->V(), _op) )
 					return ret;
 				break;
 			}
@@ -489,10 +543,8 @@ struct Node
 			case OP_FUNC:
 				g_funcs[_index-1].pfn(*this);
 				break;
-			case OP_VAR:
-				break;
 			case OP_PARENTHESIS:
-				Val() = _child->Val();
+				V() = _child->V();
 				break;
 			}
 		}
@@ -525,7 +577,7 @@ struct Node
 
 void sin(Node& node)
 {
-	node.Val().Set(::sin(node._child->Val().Get()));
+	node.V().Set(::sin(node._child->V().Get()));
 }
 
 double	min(double d1, double d2)
@@ -535,7 +587,7 @@ double	min(double d1, double d2)
 
 void min(Node& node)
 {
-	node.Val().Set(min(node._child->_next->Val().Get(), node._child->Val().Get()));
+	node.V().Set(min(node._child->_next->V().Get(), node._child->V().Get()));
 }
 
 class	Parser
@@ -611,7 +663,7 @@ public:
 				continue;
 			}
 
-			VAL val;
+			Val val;
 			if( ParseVal(val) )
 			{
 				LAST_ERROR(P_VALUE, E_VAL);
@@ -714,7 +766,7 @@ protected:
 		return true;
 	}
 	
-	bool	ParseVal(VAL& val)
+	bool	ParseVal(Val& val)
 	{
 		if( '"' == _str.data[_index] )
 		{
@@ -722,9 +774,7 @@ protected:
 			{
 				if( '"' == _str.data[ii] )
 				{
-					STR str;
-					str.Init(_str.data + _index + 1, ii - _index - 1);
-					val.Set(str);
+					val.Set(_str.data + _index + 1, ii - _index - 1);
 					_index = ii;
 					return true;
 				}
@@ -742,7 +792,7 @@ protected:
 		//	_error = E_OVERFLOW;
 		//	return false;
 		//}
-		_index += pe - pb - 1;
+		_index += (int)(pe - pb - 1);
 		bool bFloat = false;
 		while( pb < pe )
 		{
@@ -789,27 +839,33 @@ private:
 
 using namespace RVD_FORMULA;
 
-void test(char* szFormula, const VAL& val)
+void test(char* szFormula, const Val& val)
 {
-	STR strFormula;
-	strFormula.Init(szFormula);
-	Parser parser(strFormula);
-	Node* pRoot = parser.Parse();
+	Node* pRoot = NULL;
+	{
+		STR strFormula;
+		strFormula.Init(szFormula);
+		Parser parser(strFormula);
+		pRoot = parser.Parse();
+	}
 	if( pRoot )
 	{
 		int ret = pRoot->Exec();
 		assert(!ret);
-		assert(val.Equal(pRoot->Val()));
+		assert(val.Equal(pRoot->V()));
 		delete pRoot;
 	}
-	else if( val.type != TYPE_void )
+	else if( !val.IsVoid() )
 		assert(false);
 }
 
-#define TEST(_expr)		test(#_expr, VAL(_expr))
+#define TEST(_expr)		test(#_expr, Val(_expr))
 
 int main(int argc, char* argv[])
 {
+	test(NULL, Val());
+	TEST(1+2);
+	TEST(-1.2);
 	TEST(-2*sin(-Pi/3));
 	TEST(-1-2);
 	TEST(min(3,2.));
