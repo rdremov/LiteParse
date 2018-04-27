@@ -199,8 +199,8 @@ private:
 		};
 		int		_i;
 		double	_d;
-		STR*	_pstr;	// fits 6 byte pointers
 		char	_sz[6];	// fits into _f2 and _f3
+		void*	pv;
 	};
 
 public:
@@ -243,8 +243,9 @@ public:
 	{
 		if( _exp == EXP_TYPE && _f1 == T_pstr )
 		{
-			_pstr->Free();
-			delete _pstr;
+			STR* pstr = GetSTRPtr();
+			pstr->Free();
+			delete pstr;
 		}
 		Init();
 	}
@@ -263,6 +264,8 @@ public:
 				return _i == val._i;
 			case T_sz:
 				return 0 == strcmp(_sz, val._sz);
+			case T_pstr:
+				return GetSTRPtr()->Equal(*val.GetSTRPtr());
 			}
 		}
 		return _d == val._d;
@@ -367,11 +370,21 @@ public:
 		else
 		{
 			Init(T_pstr);
-			_pstr = new STR;
 			STR str;
 			str.Init((char*)psz, len);
-			_pstr->Copy(str);
+			STR* pstr = new STR;
+			pstr->Init();
+			pstr->Copy(str);
+			__int64 i64 = (__int64) pstr;
+			_f3 = (unsigned int) pstr;
+			_f2 = (unsigned short) (i64 >> 32);
 		}
+	}
+
+protected:
+	STR* GetSTRPtr() const
+	{
+		return (STR*) ((__int64)pv & 0x0000FFFFFFFFFFFF);	// 64 bit
 	}
 };
 
@@ -872,6 +885,7 @@ int main(int argc, char* argv[])
 	TEST(sin(3.));
 	TEST(Pi);
 	TEST("junk");
+	TEST("longer junk");
 	TEST(1+2*((3+4)*2-6));
 	return 0;
 }
