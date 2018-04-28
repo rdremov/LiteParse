@@ -191,16 +191,16 @@ private:
 	{
 		struct
 		{
-			unsigned int	_f3:32;
+			unsigned int	_f1:32;
 			unsigned int	_f2:16;
-			unsigned int	_f1:4;
+			unsigned int	_type:4;
 			unsigned int	_exp:11;
 			unsigned int	_sign:1;
 		};
 		int		_i;
 		double	_d;
-		char	_sz[6];	// fits into _f2 and _f3
-		void*	pv;
+		char	_sz[6];	// fits into _f1 and _f2
+		void*	_p;
 	};
 
 public:
@@ -233,39 +233,22 @@ public:
 		Cleanup();
 	}
 
-	void	Init(int type = T_void)
-	{
-		_exp = EXP_TYPE;
-		_f1 = type;
-	}
-
-	void	Cleanup()
-	{
-		if( _exp == EXP_TYPE && _f1 == T_pstr )
-		{
-			STR* pstr = GetSTRPtr();
-			pstr->Free();
-			delete pstr;
-		}
-		Init();
-	}
-
 	bool	Equal(const Val& val) const
 	{
 		if( _exp == EXP_TYPE || val._exp == EXP_TYPE )
 		{
 			if( _exp != val._exp )
 				return false;
-			if( _f1 != val._f1 )
+			if( _type != val._type )
 				return false;
-			switch( _f1 )
+			switch( _type )
 			{
 			case T_int:
 				return _i == val._i;
 			case T_sz:
 				return 0 == strcmp(_sz, val._sz);
 			case T_pstr:
-				return GetSTRPtr()->Equal(*val.GetSTRPtr());
+				return ((STR*)GetPtr())->Equal(*((STR*)val.GetPtr()));
 			}
 		}
 		return _d == val._d;
@@ -282,7 +265,7 @@ public:
 		Cleanup();
 		if( val._exp == EXP_TYPE )
 		{
-			switch( val._f1 )
+			switch( val._type )
 			{
 			case T_int:
 				Set(una(val._i, op));
@@ -298,12 +281,12 @@ public:
 		Cleanup();
 		if( left._exp == EXP_TYPE )
 		{
-			switch( left._f1 )
+			switch( left._type )
 			{
 			case T_int:
 				if( right._exp == EXP_TYPE )
 				{
-					switch( right._f1 )
+					switch( right._type )
 					{
 					case T_int:
 						Set(bin<int, int, int>(left._i, right._i, op));
@@ -317,7 +300,7 @@ public:
 		}
 		else if( right._exp == EXP_TYPE )
 		{
-			switch( right._f1 )
+			switch( right._type )
 			{
 			case T_int:
 				Set(bin<double, double, int>(left._d, right._i, op));
@@ -333,7 +316,7 @@ public:
 	{
 		if( _exp == EXP_TYPE )
 		{
-			switch( _f1 )
+			switch( _type )
 			{
 			case T_int:
 				return _i;
@@ -344,7 +327,7 @@ public:
 
 	bool	IsVoid() const
 	{
-		return (_exp == EXP_TYPE) && (_f1 == T_void);
+		return (_exp == EXP_TYPE) && (_type == T_void);
 	}
 
 	void	Set(int val)
@@ -375,16 +358,39 @@ public:
 			STR* pstr = new STR;
 			pstr->Init();
 			pstr->Copy(str);
-			__int64 i64 = (__int64) pstr;
-			_f3 = (unsigned int) pstr;
-			_f2 = (unsigned short) (i64 >> 32);
+			SetPtr(pstr);
 		}
 	}
 
-protected:
-	STR* GetSTRPtr() const
+	void	SetPtr(void* ptr)
 	{
-		return (STR*) ((__int64)pv & 0x0000FFFFFFFFFFFF);	// 64 bit
+		__int64 i64 = (__int64) ptr;
+		assert(!(i64 & 0xFFFF000000000000));	// ptr limit 6 bytes
+		_f1 = (unsigned int) i64;
+		_f2 = (unsigned short) (i64 >> 32);
+	}
+
+	void* GetPtr() const
+	{
+		return (void*) ((__int64)_p & 0x0000FFFFFFFFFFFF);	// 64 bit
+	}
+
+protected:
+	void	Init(int type = T_void)
+	{
+		_exp = EXP_TYPE;
+		_type = type;
+	}
+
+	void	Cleanup()
+	{
+		if( _exp == EXP_TYPE && _type == T_pstr )
+		{
+			STR* pstr = (STR*) GetPtr();
+			pstr->Free();
+			delete pstr;
+		}
+		Init();
 	}
 };
 
