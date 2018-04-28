@@ -193,7 +193,7 @@ private:
 		{
 			unsigned int	_f1:32;
 			unsigned int	_f2:16;
-			unsigned int	_type:4;
+			unsigned int	_type:4;	// T_* if not double
 			unsigned int	_exp:11;
 			unsigned int	_sign:1;
 		};
