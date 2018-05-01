@@ -145,6 +145,31 @@ struct STR
 	}
 };
 
+// lightweight reference counted string
+class	Str
+{
+public:
+	void	Free()
+	{
+	}
+
+	Str*	Equal()
+	{
+	}
+
+	Str()
+	{
+		_len = 0;
+		_refs = 0;
+		_psz = 0;
+	}
+
+private:
+	int		_len;
+	int		_refs;
+	char*	_psz;
+};
+
 template<class T>
 T	una(T t, char op)
 {
